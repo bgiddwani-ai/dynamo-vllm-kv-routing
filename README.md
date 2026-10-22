@@ -16,7 +16,7 @@ This recipe packages the tested **Dynamo runtime 1.5.1 / vLLM 0.28.0** configura
 ```bash
 ssh -t USER@GPU_NODE
 screen -S dynamo-kv
-git clone <YOUR_REPOSITORY_URL> dynamo-vllm-kv-routing
+git clone https://github.com/bgiddwani-ai/dynamo-vllm-kv-routing.git
 cd dynamo-vllm-kv-routing
 export NAMESPACE=YOUR_NAMESPACE
 export RELEASE=nemotron
