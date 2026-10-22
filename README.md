@@ -2,11 +2,12 @@
 
 Deploy **Nemotron Super 49B FP8** using Helm: one Dynamo KV router → **two vLLM workers, TP=4 each**, on eight H200 GPUs. The router uses cached-prefix information and worker load to place requests. Both workers enable prefix caching and publish KV events.
 
-This recipe packages the tested **Dynamo runtime 1.5.1 / vLLM 0.28.0** configuration. The runtime image and model revision are pinned; the installed operator must be compatible. Revalidate upgrades separately.
+This recipe packages the tested **Dynamo runtime 1.5.1 / vLLM 0.28.0** configuration. Install the platform from the [official NVIDIA Dynamo repository](https://github.com/ai-dynamo/dynamo) below. The source release, runtime image and model revision are pinned; revalidate upgrades separately.
 
 ## Prerequisites
 
-- Kubernetes with the Dynamo operator/Grove and NVIDIA GPU **DRA** driver already installed. Tested on Kubernetes 1.34.3 with Helm 3.18.3 and Python 3.12.3.
+- Kubernetes **1.34+**, Helm 3 and Python 3.12, with NVIDIA drivers, container runtime and NVIDIA GPU **DRA** driver configured. Tested on Kubernetes 1.34.3 with Helm 3.18.3 and Python 3.12.3. See [NVIDIA's DRA installation guide](https://github.com/NVIDIA/k8s-dra-driver-gpu#installation); installing Dynamo does not install the GPU DRA driver.
+- Cluster-admin access for the one-time Dynamo platform installation, or an administrator who provides a compatible existing installation.
 - One healthy eight-GPU H200 node; permission/quota to allocate eight GPUs in your namespace. A device-plugin-only cluster needs a different GPU allocation template.
 - An existing model PVC mountable by all three pods, at least **60 GB** free for weights, and permission to pull the NVIDIA runtime image. Configure a namespace image-pull secret/service account if your registry requires one.
 - CPU/RAM headroom for the chart requests: 36 CPU cores and 97 GiB RAM total, plus cluster/operator overhead. Each worker has a 96 GiB memory limit and 16 GiB shared memory.
@@ -18,13 +19,39 @@ ssh -t USER@GPU_NODE
 screen -S dynamo-kv
 git clone https://github.com/bgiddwani-ai/dynamo-vllm-kv-routing.git
 cd dynamo-vllm-kv-routing
-export NAMESPACE=YOUR_NAMESPACE
+export NAMESPACE=llm-demo
+export DYNAMO_NAMESPACE=dynamo-system
 export RELEASE=nemotron
+kubectl config current-context
+kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 Run the remaining commands inside this screen. Detach with **Ctrl-A, D**; reconnect with `screen -r dynamo-kv`.
 
-## 2. Download the pinned model
+## 2. Install Dynamo from the official repository
+
+For a fresh cluster, install the operator and platform from NVIDIA's pinned source release. On a shared cluster, first check `helm list --all-namespaces` with your administrator; **reuse an existing compatible operator instead of installing a second one**. If it is already installed, skip to step 3.
+
+```bash
+export DYNAMO_VERSION=1.5.1
+export DYNAMO_SOURCE_DIR="$HOME/dynamo-official-$DYNAMO_VERSION"
+git clone --depth 1 --branch "v$DYNAMO_VERSION" \
+  https://github.com/ai-dynamo/dynamo.git "$DYNAMO_SOURCE_DIR"
+helm dependency build "$DYNAMO_SOURCE_DIR/deploy/helm/charts/platform"
+helm install dynamo-platform "$DYNAMO_SOURCE_DIR/deploy/helm/charts/platform" \
+  --namespace "$DYNAMO_NAMESPACE" --create-namespace \
+  --set global.grove.install=true \
+  --set global.kai-scheduler.install=true \
+  --set-string 'kai-scheduler.scheduler.args.default-staleness-grace-period=-1s' \
+  --wait --timeout 10m
+kubectl -n "$DYNAMO_NAMESPACE" get pods
+kubectl get crd dynamographdeployments.nvidia.com
+kubectl get deviceclass gpu.nvidia.com
+```
+
+The platform installs the Dynamo operator, which applies the CRDs automatically. These flags also install the compatible bundled Grove and KAI Scheduler for this example. Production clusters can manage Grove/KAI separately and use `global.grove.enabled=true` / `global.kai-scheduler.enabled=true` instead of the corresponding `install` flags. This release uses Kubernetes discovery and TCP/ZMQ by default, so this setup does not require bundled etcd or NATS. See the [official installation guide at v1.5.1](https://github.com/ai-dynamo/dynamo/blob/v1.5.1/docs/fern/pages/kubernetes/installation/install-dynamo.md).
+
+## 3. Download the pinned model
 
 `MODEL_DIR` must be on the shared filesystem exposed by your PVC. For example, if the PVC root is `/shared`, use the path below and keep `model.subPath: models/Llama-3_3-Nemotron-Super-49B-v1_5-FP8`.
 
@@ -38,7 +65,7 @@ bash scripts/download_model.sh
 
 The download pins revision `04822723e77e036ddf2d24e83c6d469d3b009252`. Validation checks the safetensors index, shard headers and tensor bounds without loading weights into RAM. An existing download can be checked with `.venv/bin/python scripts/verify_model.py "$MODEL_DIR"`. The chart uses `--trust-remote-code` for this pinned NVIDIA model; keep the downloaded directory unchanged.
 
-## 3. Set node, storage and GPU ownership
+## 4. Set node, storage and GPU ownership
 
 ```bash
 kubectl get nodes -o wide
@@ -46,6 +73,8 @@ kubectl get crd dynamographdeployments.nvidia.com
 kubectl get deviceclass gpu.nvidia.com
 kubectl -n "$NAMESPACE" get resourcequota,pvc
 nvidia-smi --query-gpu=index,uuid,memory.used,temperature.gpu --format=csv
+id -u
+id -g
 cp values.yaml values.local.yaml
 ${EDITOR:-vi} values.local.yaml
 ```
@@ -57,13 +86,13 @@ Edit these values:
 | `node` | Kubernetes hostname of the GPU node, not its SSH address |
 | `model.pvc` | Existing PVC in `$NAMESPACE` |
 | `model.subPath` | Model directory relative to the PVC root |
-| `user.uid`, `user.gid` | IDs allowed to read that directory |
+| `user.uid`, `user.gid` | Your `id -u` / `id -g`, or other IDs allowed to read that directory |
 | `workerGroups[0].gpuUUIDs` | Four real GPU UUIDs corresponding to GPUs 0–3 |
 | `workerGroups[1].gpuUUIDs` | Four different UUIDs corresponding to GPUs 4–7 |
 
 Use available GPUs only. Each group has **one** replica; add another group with disjoint GPUs to scale. DRA enforces device ownership; a startup guard verifies the assigned UUIDs and refuses busy devices. Do not override `NVIDIA_VISIBLE_DEVICES`. The sample UUIDs are placeholders and must be replaced.
 
-## 4. Validate and deploy with Helm
+## 5. Validate and deploy with Helm
 
 ```bash
 helm lint . -f values.local.yaml
@@ -71,11 +100,12 @@ helm template "$RELEASE" . -n "$NAMESPACE" -f values.local.yaml > rendered.yaml
 kubectl -n "$NAMESPACE" apply --dry-run=server -f rendered.yaml
 helm upgrade --install "$RELEASE" . -n "$NAMESPACE" \
   --reset-values -f values.local.yaml
-kubectl -n "$NAMESPACE" get pods \
-  -l "nic.nvidia.com/release=$RELEASE" -o wide --watch
+kubectl -n "$NAMESPACE" get pods -o wide --watch
 ```
 
 Wait for the **frontend and both workers** to become Ready, then press Ctrl-C to leave the watch. The operator may create additional infrastructure pods. A successful Helm command alone does not mean model loading is complete. Inspect a failing pod using `kubectl -n "$NAMESPACE" describe pod POD` and `kubectl -n "$NAMESPACE" logs POD -c main`.
+
+All namespace and release names above are examples. Substitute your own Kubernetes context, namespace, node name, PVC and GPU UUIDs; no private cluster addresses or credentials are required in this repository. The chart sets `runtimeVersionOverride: "1.5.1"` so the operator can validate the digest-pinned runtime image.
 
 The chart launches these entry points:
 
@@ -93,7 +123,7 @@ The worker settings are TP=4, 32,000-token context, ModelOpt FP8 weights, FP8 KV
 
 Use the Dynamo frontend endpoint for requests. Launching a standalone vLLM API server does not enable Dynamo KV routing. Keep operator-managed discovery and KV-event traffic reachable between pods.
 
-## 5. Send a request
+## 6. Send a request
 
 ```bash
 kubectl -n "$NAMESPACE" port-forward "service/$RELEASE-kv" 8000:8000 \
@@ -120,4 +150,4 @@ kubectl -n "$NAMESPACE" get pods,resourceclaims
 
 Confirm the worker pods and claims disappear and GPU memory is released. The model PVC and weights are retained. Do not shut down a shared node.
 
-References: [Dynamo operator](https://docs.nvidia.com/dynamo/latest/kubernetes-deployment/deployment-guide/dynamo-operator), [Dynamo source](https://github.com/ai-dynamo/dynamo), [model card](https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8).
+References: [Official platform chart](https://github.com/ai-dynamo/dynamo/tree/v1.5.1/deploy/helm/charts/platform), [Dynamo source](https://github.com/ai-dynamo/dynamo), [model card](https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8).

@@ -30,6 +30,7 @@ spec:
   {{- range $mode := list "kv" }}
     - name: {{ if eq $mode "kv" }}FrontendKv{{ else }}FrontendRr{{ end }}
       type: frontend
+      runtimeVersionOverride: {{ $.Chart.AppVersion | quote }}
       replicas: 1
       podTemplate:
         metadata:
@@ -72,6 +73,7 @@ spec:
   {{- with $ }}
     - name: {{ $group.name }}
       type: worker
+      runtimeVersionOverride: {{ .Chart.AppVersion | quote }}
       replicas: {{ if hasKey $group "replicas" }}{{ $group.replicas }}{{ else }}{{ .Values.workers.replicas }}{{ end }}
       sharedMemorySize: {{ .Values.workers.sharedMemorySize }}
       podTemplate:
