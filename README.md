@@ -4,6 +4,85 @@ Deploy **Nemotron Super 49B FP8** using Helm: one Dynamo KV router → **two vLL
 
 This recipe packages the tested **Dynamo runtime 1.5.1 / vLLM 0.28.0** configuration. Install the platform from the [official NVIDIA Dynamo repository](https://github.com/ai-dynamo/dynamo) below. The source release, runtime image and model revision are pinned; revalidate upgrades separately.
 
+## Measured performance: 4+4 GPUs
+
+Measured on **22 October 2026**, using **eight H200 GPUs as two TP=4 replicas** with the same Nemotron FP8 model, pinned runtime, engine settings and physical GPU groups in both passes. **RR** means native vLLM behind NGINX round-robin; **KV** means Dynamo vLLM behind its KV-aware frontend. The native pass finished first, then its workers were removed before fresh KV workers launched. Both stacks enabled prefix caching; caches reset before each concurrency cell.
+
+### Median changes across paired cases
+
+TTFT is time to first token. Below, a **negative TTFT change is better** and a **positive throughput change is better**. Changes are `(KV − RR) / RR × 100`; they are medians of paired case changes, not changes between pooled request medians.
+
+| Input profile | Median p50 TTFT change | Median output throughput change |
+|---|---:|---:|
+| 1,024 tokens — short | +2.06% | -0.77% |
+| 8,192 tokens — medium | +3.35% | -0.11% |
+| Short/medium combined — 28 cases | +2.83% | -0.28% |
+| 24,128 tokens — long | -30.60% | +16.42% |
+
+The short/medium matrix showed **no overall improvement**. The long-context workload showed **30.60% lower p50 TTFT** and **16.42% higher output throughput**; its median paired p95 TTFT reduction was only **0.065%**, essentially unchanged.
+
+### Short and medium context: 1K / 8K input
+
+**23,808 measured requests, 112 cells, zero errors.** Inputs were exactly 1,024 or 8,192 tokens; each response generated 128 tokens. Each input length tested 0% and 90% configured prefix sharing across eight prefix families, at concurrency **1, 8, 32, 64, 128, 200 and 256**. Each case ran two trials per backend, with `max(64, 2 × concurrency)` requests per trial. The absolute values below average the two per-trial statistics; request quantiles are not pooled.
+
+<details>
+<summary>Expand all 28 short/medium cases: absolute TTFT and output throughput</summary>
+
+| Input tokens | Shared prefix | Concurrency | RR p50 TTFT (ms) | KV p50 TTFT (ms) | RR output (tok/s) | KV output (tok/s) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1,024 | 0% | 1 | 49.4 | 51.5 | 157.4 | 156.4 |
+| 1,024 | 0% | 8 | 158.6 | 158.1 | 1,096.4 | 1,093.5 |
+| 1,024 | 0% | 32 | 575.2 | 573.6 | 2,900.2 | 2,875.8 |
+| 1,024 | 0% | 64 | 745.4 | 669.9 | 3,878.1 | 3,854.5 |
+| 1,024 | 0% | 128 | 1,490.0 | 1,212.8 | 5,071.4 | 4,903.8 |
+| 1,024 | 0% | 200 | 1,949.2 | 2,156.4 | 5,484.5 | 5,446.0 |
+| 1,024 | 0% | 256 | 2,104.5 | 2,324.7 | 5,748.7 | 5,531.0 |
+| 1,024 | 90% | 1 | 20.1 | 45.4 | 161.9 | 161.5 |
+| 1,024 | 90% | 8 | 36.1 | 51.7 | 1,189.2 | 1,185.7 |
+| 1,024 | 90% | 32 | 129.1 | 126.3 | 3,840.5 | 3,608.5 |
+| 1,024 | 90% | 64 | 205.7 | 215.3 | 6,304.6 | 6,281.7 |
+| 1,024 | 90% | 128 | 364.0 | 324.8 | 11,218.3 | 11,078.9 |
+| 1,024 | 90% | 200 | 473.1 | 504.5 | 13,843.7 | 13,676.3 |
+| 1,024 | 90% | 256 | 634.2 | 608.3 | 16,044.3 | 14,789.2 |
+| 8,192 | 0% | 1 | 312.6 | 307.4 | 116.7 | 116.5 |
+| 8,192 | 0% | 8 | 1,039.5 | 1,030.9 | 511.9 | 510.8 |
+| 8,192 | 0% | 32 | 2,661.2 | 2,501.5 | 724.0 | 722.9 |
+| 8,192 | 0% | 64 | 3,077.9 | 2,942.4 | 771.6 | 771.9 |
+| 8,192 | 0% | 128 | 2,569.7 | 3,992.1 | 806.6 | 807.9 |
+| 8,192 | 0% | 200 | 2,391.7 | 3,876.5 | 812.4 | 811.9 |
+| 8,192 | 0% | 256 | 2,484.5 | 6,626.9 | 819.2 | 817.6 |
+| 8,192 | 90% | 1 | 78.2 | 68.3 | 139.4 | 144.1 |
+| 8,192 | 90% | 8 | 95.9 | 87.5 | 796.6 | 835.1 |
+| 8,192 | 90% | 32 | 477.0 | 607.8 | 1,576.9 | 1,680.6 |
+| 8,192 | 90% | 64 | 877.9 | 1,055.3 | 2,441.7 | 2,506.8 |
+| 8,192 | 90% | 128 | 1,856.4 | 2,037.9 | 3,560.0 | 3,541.6 |
+| 8,192 | 90% | 200 | 2,517.9 | 2,549.6 | 3,977.9 | 3,969.0 |
+| 8,192 | 90% | 256 | 2,420.9 | 2,552.4 | 4,427.1 | 4,266.6 |
+
+</details>
+
+[Download all short/medium measurements](benchmarks/short-context.csv), including mean/p95 TTFT, end-to-end latency and throughput.
+
+### Long context: 24K reusable documents
+
+**10,752 measured requests, 14 cells, zero errors.** The workload used 256 PG-19 book excerpts, each with a **24,000-token document prefix + 128-token question**, followed by 64 generated tokens. Three different question rounds gave 768 requests per cell and one exploratory trial per backend/concurrency. The 6,144,000-token prefix set exceeded one worker's measured cache capacity but fit within the two workers' combined capacity. This creates an opportunity for routing to avoid duplicated prefixes; cache memory remains local to each worker.
+
+Throughput below is aggregate **generated output tokens per second across both workers**, including the cell's cold and repeated-prefix requests; it is not input-token throughput or a per-GPU figure.
+
+| Concurrency | RR p50 TTFT (ms) | KV p50 TTFT (ms) | TTFT change | RR output (tok/s) | KV output (tok/s) | Throughput change |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1,065.7 | 80.0 | -92.49% | 59.9 | 79.8 | +33.12% |
+| 8 | 1,092.9 | 1,057.6 | -3.24% | 168.8 | 177.2 | +5.00% |
+| 32 | 1,917.7 | 1,413.9 | -26.27% | 192.4 | 214.9 | +11.74% |
+| 64 | 2,313.0 | 2,092.4 | -9.54% | 195.6 | 217.1 | +10.95% |
+| 128 | 5,392.4 | 3,446.6 | -36.08% | 202.2 | 236.6 | +17.01% |
+| 200 | 16,731.8 | 11,612.7 | -30.60% | 208.6 | 242.9 | +16.42% |
+| 256 | 33,359.8 | 21,089.3 | -36.78% | 209.2 | 249.0 | +19.06% |
+
+[Download all long-context measurements](benchmarks/long-context.csv), including mean/p95 TTFT, end-to-end latency, throughput and cache-hit counters. The same aggregate output-throughput definition applies to the short/medium table.
+
+**Interpretation and limits:** At concurrency 1, long-context prefix-token hits rose from 40.15% to 66.31%; cold-round p50 TTFT remained similar (RR 1,071 ms; KV 1,054 ms). The large overall p50 reduction reflects more requests hitting warm prefixes, not a 92% speedup of cold prefill. These are finite-batch, fixed native-first, complete-serving-stack comparisons; the results do not isolate the router's contribution. Short/medium used two trials and long used one: no statistical-significance or answer-quality claim is made. Output lengths differ between profiles, so compare RR versus KV within each profile.
+
 ## Prerequisites
 
 - Kubernetes **1.34+**, Helm 3 and Python 3.12, with NVIDIA drivers, container runtime and NVIDIA GPU **DRA** driver configured. Tested on Kubernetes 1.34.3 with Helm 3.18.3 and Python 3.12.3. See [NVIDIA's DRA installation guide](https://github.com/NVIDIA/k8s-dra-driver-gpu#installation); installing Dynamo does not install the GPU DRA driver.
