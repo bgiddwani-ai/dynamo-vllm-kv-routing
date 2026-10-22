@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dynamo-vllm-kv-routing
+description: Nemotron FP8 on two TP=4 vLLM workers with Dynamo KV-aware routing
+type: application
+version: 1.0.0
+appVersion: "1.5.1"

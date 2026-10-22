@@ -1,0 +1,15 @@
+{{- range $mode := list "kv" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-{{ $mode }}
+spec:
+  selector:
+    nic.nvidia.com/release: {{ $.Release.Name }}
+    nic.nvidia.com/role: frontend-{{ $mode }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+{{- end }}

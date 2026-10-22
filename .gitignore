@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+values.local.yaml
+rendered.yaml
+model-validation.json
+models/
+results/
+evidence/
+exports/
+*.zip
+*.zst
+.env
+.env.*
+*.pem
+*.key

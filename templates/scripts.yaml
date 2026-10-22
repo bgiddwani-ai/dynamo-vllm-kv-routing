@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-scripts
+data:
+  gpu_guard.py: |
+{{ .Files.Get "scripts/gpu_guard.py" | indent 4 }}
+  safety_guard.py: |
+{{ .Files.Get "scripts/safety_guard.py" | indent 4 }}

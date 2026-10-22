@@ -1,0 +1,55 @@
+# Copy to values.local.yaml and edit node, PVC, UID/GID and all eight GPU UUIDs.
+# This is the tested runtime, pinned by digest. Upgrade separately after validation.
+image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.5.1@sha256:4c094ab4dbb07ee434f45c17045b018255563898cd64ef78d9922f9c311c8959
+node: REPLACE_WITH_KUBERNETES_NODE_NAME
+model:
+  repository: nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8
+  revision: 04822723e77e036ddf2d24e83c6d469d3b009252
+  servedName: Llama-3_3-Nemotron-Super-49B-v1_5-FP8
+  pvc: REPLACE_WITH_MODEL_PVC
+  # Relative to the PVC root; this directory must already contain the download.
+  subPath: models/Llama-3_3-Nemotron-Super-49B-v1_5-FP8
+user:
+  uid: 2002
+  gid: 2002
+frontend:
+  cpu: "4"
+  memoryRequest: 1Gi
+  memoryLimit: 4Gi
+workers:
+  deviceClassName: gpu.nvidia.com
+  tensorParallel: 4
+  maxModelLen: 32000
+  gpuMemoryUtilization: 0.88
+  maxBatchedTokens: 16384
+  maxSequences: 128
+  blockSize: 64
+  cpu: "16"
+  memoryRequest: 48Gi
+  memoryLimit: 96Gi
+  sharedMemorySize: 16Gi
+  maxExistingMemoryMiB: 1024
+  conservativeCollectives: false
+  safety:
+    enabled: true
+    startTempC: 60
+    stopTempC: 80
+# Each group is exactly ONE replica and requires disjoint physical GPUs.
+# Replace these example UUIDs with nvidia-smi output from your chosen node.
+workerGroups:
+  - name: VllmWorker0
+    replicas: 1
+    claimSuffix: gpus-0
+    gpuUUIDs:  # Physical GPUs 0-3 on the selected node.
+      - GPU-00000000-0000-0000-0000-000000000001
+      - GPU-00000000-0000-0000-0000-000000000002
+      - GPU-00000000-0000-0000-0000-000000000003
+      - GPU-00000000-0000-0000-0000-000000000004
+  - name: VllmWorker1
+    replicas: 1
+    claimSuffix: gpus-1
+    gpuUUIDs:  # Physical GPUs 4-7 on the selected node.
+      - GPU-00000000-0000-0000-0000-000000000005
+      - GPU-00000000-0000-0000-0000-000000000006
+      - GPU-00000000-0000-0000-0000-000000000007
+      - GPU-00000000-0000-0000-0000-000000000008

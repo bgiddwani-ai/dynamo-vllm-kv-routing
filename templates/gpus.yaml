@@ -1,0 +1,22 @@
+{{- $groups := .Values.workerGroups }}
+{{- range $group := $groups }}
+{{- with $ }}
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: {{ .Release.Name }}-{{ $group.claimSuffix }}
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: {{ .Values.workers.deviceClassName }}
+            allocationMode: ExactCount
+            count: {{ .Values.workers.tensorParallel }}
+            selectors:
+              - cel:
+                  expression: {{ printf "device.attributes['gpu.nvidia.com'].uuid in %s" (toJson $group.gpuUUIDs) | quote }}
+{{- end }}
+{{- end }}
